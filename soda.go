@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	certstream "github.com/CaliDog/certstream-go"
@@ -29,22 +28,16 @@ var (
 	punyDomainSlice []string
 	// clear is a map of function clear that is used to clear the terminal screen
 	clear map[string]func()
-	// sem is a channel that limits the number of concurrent goroutines
-	sem = make(chan struct{}, 100)
-	// wg is a WaitGroup used to wait for all goroutines to complete
-	wg sync.WaitGroup
-	// thisJsProfile is an instance of the JsProfile struct
-	thisDomainProfile *DomainProfile
-	// jsProfileSlice is a slice of JsProfile instances
-	domainProfileSlice []*DomainProfile
-	domainProfilesJson []byte
-)
 
-type DomainProfile struct {
-	Domain          *string   `json:"domain"`
-	JsEndpoints     []*string `json:"jsEndpoints"`
-	JarmFingerprint *string   `json: jarmFingerprint`
-}
+	/*
+			!!!! Only need the following for scraping html/js !!!!
+
+		// sem is a channel that limits the number of concurrent goroutines
+		sem = make(chan struct{}, 100)
+		// wg is a WaitGroup used to wait for all goroutines to complete
+		wg sync.WaitGroup
+	*/
+)
 
 func init() {
 	// Init clear funcs
@@ -123,10 +116,15 @@ func printBanner() {
 	color.Unset()
 	fmt.Print("Show live certstream listener\n")
 	color.Set(color.FgHiGreen, color.Bold)
-	fmt.Print("\n  => quit:		")
+	fmt.Print("\n  => output:		")
 	color.Unset()
-	fmt.Print("Exit program\n\n")
-	fmt.Print("sodacert ~> ")
+	fmt.Print("Show the contents of domains.txt file in output folder\n")
+	color.Set(color.FgHiGreen, color.Bold)
+	fmt.Print("\n  => quit or q:		")
+	color.Unset()
+	fmt.Print("Exit program\n")
+	printHashDiv()
+	fmt.Print("\nsodacert ~> ")
 
 }
 
@@ -144,7 +142,7 @@ func startCertStreamListener() {
 			_ = messageType
 			// Get CN (commonname)
 			commonName, _ := jq.String("data", "leaf_cert", "subject", "CN")
-			var cryptoRegexp = regexp.MustCompile(`(hacking|hitman|carding|fullz|dumps|banklogs|counterfeit|passport|cocaine|meth|heroin)`)
+			var cryptoRegexp = regexp.MustCompile(`(hacker|whitehat|greyhat|grayhat|blackhat|simswap|drainer|hacking|hitman|carding|fullz|silkroad|alphabay|dredd|tortodoor|dumps|banklogs|counterfeit|passport|cocaine|meth|heroin)`)
 			if cryptoRegexp.MatchString(commonName) {
 				if strings.Contains(commonName, "xn--") {
 					// Raw Punycode has no restrictions and does no mappings.
@@ -187,9 +185,116 @@ func startCertStreamListener() {
 	}
 }
 
+func readDomainsFile() {
+	file, err := os.Open("./output/domains.txt")
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fmt.Println(scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Println("Error reading file:", err)
+	}
+}
+
+func dedupeDomainsFile() {
+	// Open file for reading
+	file, err := os.Open("./output/domains.txt")
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	// Read file contents into memory
+	scanner := bufio.NewScanner(file)
+	lines := make([]string, 0)
+	for scanner.Scan() {
+		line := scanner.Text()
+		lines = append(lines, line)
+	}
+
+	// Remove duplicate lines
+	uniqueLines := make(map[string]bool)
+	for _, line := range lines {
+		if !uniqueLines[line] {
+			uniqueLines[line] = true
+		}
+	}
+
+	// Overwrite file with unique lines
+	file, err = os.OpenFile("./output/domains.txt", os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for line := range uniqueLines {
+		_, err = writer.WriteString(line + "\n")
+		if err != nil {
+			panic(err)
+		}
+	}
+	err = writer.Flush()
+	if err != nil {
+		panic(err)
+	}
+
+}
+
 func main() {
 	// Start certstream listener
 	go startCertStreamListener()
+
+	ticker := time.NewTicker(2500 * time.Millisecond)
+
+	// create goroutine to write data to file every 10 seconds
+	go func() {
+		// read existing lines in the file
+		file, err := os.OpenFile("./output/domains.txt", os.O_RDONLY, 0666)
+		if err != nil {
+			panic(err)
+		}
+		defer file.Close()
+
+		existingLines := make(map[string]bool) // map to track existing lines in the file
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			existingLines[scanner.Text()] = true
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				curDomainSlice := regDomainSlice
+				file, err := os.OpenFile("./output/domains.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+				if err != nil {
+					panic(err)
+				}
+
+				// write new domains to file and update existingLines set
+				writer := bufio.NewWriter(file)
+				for _, domain := range curDomainSlice {
+					if !existingLines[domain] {
+						_, err = writer.WriteString(domain + "\n")
+						if err != nil {
+							panic(err)
+						}
+						existingLines[domain] = true
+					}
+				}
+				writer.Flush()
+				file.Close()
+			}
+		}
+	}()
+
 	// Run function to auto getjs and monkeycheck every 60 seconds (default)
 	var inputBuff string
 	for {
@@ -216,14 +321,14 @@ func main() {
 							for i := range regDomainSlice {
 								fmt.Printf("%s, ", regDomainSlice[i])
 							}
-							/*
-								color.Set(color.FgHiRed, color.Bold)
-								fmt.Println("\n\nPuny domains:")
-								color.Unset()
-								for i := range punyDomainSlice {
-									fmt.Printf("%s, ", punyDomainSlice[i])
-								}
-							*/
+
+							color.Set(color.FgHiRed, color.Bold)
+							fmt.Println("\n\nPuny domains:")
+							color.Unset()
+							for i := range punyDomainSlice {
+								fmt.Printf("%s, ", punyDomainSlice[i])
+							}
+
 							fmt.Print("\n")
 							printHashDiv()
 							color.Set(color.FgHiCyan, color.Bold)
@@ -239,9 +344,24 @@ func main() {
 				stop2 <- struct{}{}
 				callClear()
 				printBanner()
+			}
+		// Read domain output file and print to terminal (STDOUT)
+		case "output":
+			{
+				callClear()
+				printHashDiv()
+				fmt.Println()
+				readDomainsFile()
+				printHashDiv()
+				color.Set(color.FgHiCyan, color.Bold)
+				fmt.Print("\nHit enter to go back to main menu: ")
+				color.Unset()
+				input := bufio.NewScanner(os.Stdin)
+				input.Scan()
+				callClear()
+				printBanner()
 
 			}
-
 		default:
 			{
 				fmt.Println("Try entering a valid command next time bozo!")
